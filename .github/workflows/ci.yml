@@ -1,4 +1,4 @@
-name: Java CI Pipeline
+name: Java CI & QA Quality Pipeline
 
 on:
   push:
@@ -7,12 +7,12 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
-    name: Build & Run Unit Tests
+  build-test-performance:
+    name: Build, Tests (Unit & BDD) & Performance Quality Gate
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout del repositorio
+      - name: Checkout del código fuente
         uses: actions/checkout@v4
 
       - name: Configurar Java JDK 17
@@ -22,20 +22,65 @@ jobs:
           distribution: "temurin"
           cache: "maven"
 
-      - name: Compilar proyecto
+      - name: 1. Compilación del proyecto
         run: mvn clean compile
 
-      - name: Ejecutar pruebas unitarias
+      - name: 2. Ejecución de Pruebas Unitarias y BDD (Cucumber)
         run: mvn test
 
-      - name: Generar reporte HTML con Surefire
+      - name: 3. Generar Reporte de Pruebas Unitarias Surefire
         if: always()
         run: mvn surefire-report:report-only
 
-      - name: Publicar reporte navegable como artefacto
+      - name: 4. Publicar Reporte Navegable HTML de Cucumber (BDD)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-test-reports
+          name: bdd-cucumber-report
+          path: target/cucumber-reports/cucumber.html
+          retention-days: 14
+
+      - name: 5. Publicar Reporte Unitario Surefire
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-unit-report
           path: target/site/surefire-report.html
           retention-days: 14
+
+      - name: 6. Instalar herramienta de Performance (k6)
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: 7. Ejecutar Prueba de Performance k6 con Quality Gates
+        run: k6 run performance-test.js --summary-export=k6-summary.json
+
+      - name: 8. Publicar Resumen de Performance (Artefacto)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-performance-summary
+          path: k6-summary.json
+          retention-days: 14
+
+      # Simulación de Alertas Automáticas (Slack / Teams / Discord)
+      - name: Notificar Alerta ante Fallo de Calidad o Performance
+        if: failure()
+        run: |
+          echo "=========================================================="
+          echo "🚨 ALERTA CRÍTICA: Degradación detectada en el Pipeline CI"
+          echo "Motivo: Violación de SLAs de rendimiento o rotura de tests BDD."
+          echo "Notificando al canal #ci-quality-alerts vía Webhook..."
+          echo "=========================================================="
+
+      - name: Notificar Estado Exitoso del Pipeline
+        if: success()
+        run: |
+          echo "=========================================================="
+          echo "✅ PIPELINE EXITOSO: Todas las métricas de calidad satisfechas."
+          echo "Tests Unitarios, BDD y Criterios k6 (p95 < 500ms, fallos < 1%) APROBADOS."
+          echo "=========================================================="
